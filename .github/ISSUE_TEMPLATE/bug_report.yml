@@ -1,0 +1,38 @@
+name: Bug Report
+description: Report a bug in damai-mcp
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What happened?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Call tool X with Y
+        2. See error Z
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Device
+      placeholder: "e.g. 127.0.0.1:5555 (雷电模拟器), HUAWEI Pura 70 Pro"
+  - type: input
+    id: version
+    attributes:
+      label: damai-mcp version
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      render: text
