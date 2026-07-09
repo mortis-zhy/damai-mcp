@@ -109,7 +109,8 @@ class DeviceManager:
 
         async def _safe_get(*args: str) -> str:
             try:
-                return (await shell(*args, device_id=device_id, timeout=5, check=False)).strip()
+                result = await shell(*args, device_id=device_id, timeout=5, check=False)
+                return result.strip()
             except Exception:  # noqa: BLE001
                 return ""
 
@@ -123,8 +124,10 @@ class DeviceManager:
             or "sdk_gphone" in (await _safe_get("getprop", "ro.product.device")).lower()
         )
         try:
-            mem_kb = int(await _safe_get("cat", "/proc/meminfo").split("MemTotal:")[1].split()[0])
-            info.total_mem_mb = mem_kb // 1024
+            meminfo = await _safe_get("cat", "/proc/meminfo")
+            if "MemTotal:" in meminfo:
+                mem_kb = int(meminfo.split("MemTotal:")[1].split()[0])
+                info.total_mem_mb = mem_kb // 1024
         except (IndexError, ValueError):
             pass
         return info

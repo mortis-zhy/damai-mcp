@@ -70,7 +70,7 @@ async def test_scroll_down_calls_swipe():
         return ""
 
     with patch("damai_mcp.actions.actions.shell", side_effect=fake_shell):
-        await scroll("DEV", "down", distance_ratio=0.5)
+        await scroll("DEV", "down", 0.5)
     swipe_call = next(c for c in calls if len(c) >= 1 and c[0].startswith("input swipe"))
     assert "540" in swipe_call[0]  # center x
     assert "1200" in swipe_call[0]  # center y

@@ -75,8 +75,8 @@ async def swipe(
 async def scroll(
     device_id: str,
     direction: Literal["up", "down", "left", "right"] = "down",
-    *,
     distance_ratio: float = 0.6,
+    *,
     duration_ms: int = 300,
 ) -> None:
     """Scroll the screen by `distance_ratio * screen_height/width`.

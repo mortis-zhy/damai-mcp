@@ -210,7 +210,7 @@ async def scroll(
         distance_ratio: 滚动距离占屏幕短边的比例（0-1）。
         duration_ms: 滚动时长。
     """
-    await _scroll(device_id, direction, distance_ratio=distance_ratio, duration_ms=duration_ms)
+    await _scroll(device_id, direction, distance_ratio, duration_ms=duration_ms)
     return {"scrolled": direction, "distance_ratio": distance_ratio}
 
 

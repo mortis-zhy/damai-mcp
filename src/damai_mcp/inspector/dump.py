@@ -31,11 +31,10 @@ async def dump_ui(device_id: str, *, compressed: bool = True) -> list[UIElement]
     """
     # 1. ask uiautomator to dump
     dump_cmd = "uiautomator dump --compressed" if compressed else "uiautomator dump"
-    result = await shell(dump_cmd, device_id=device_id, timeout=15, check=False)
+    dump_out = await shell(dump_cmd, device_id=device_id, timeout=15, check=False)
     # uiautomator dump prints "UI hierchary dumped to: /sdcard/...xml" on stdout
-    # but check returncode for failures
-    if result.returncode != 0 and "dumped" not in result:
-        raise ADBError(f"uiautomator dump 失败: {result}")
+    if not dump_out or "dumped" not in dump_out:
+        raise ADBError(f"uiautomator dump 失败: {dump_out!r}")
 
     # 2. read the XML — try several known paths
     candidates = [
