@@ -40,3 +40,5 @@ accounts.local.json
 # OS
 .DS_Store
 Thumbs.db
+# 调试截图（运行时生成）
+damai_shots/
