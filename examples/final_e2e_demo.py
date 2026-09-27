@@ -7,24 +7,32 @@
 4. L3: dump UI + 找关键元素
 5. L2: tap 点击
 6. 验证最终状态
+
+注意：本示例使用雷电模拟器(LDPlayer)。请根据你的实际情况修改设备路径。
+默认通过 PATH 查找 adb，或设置环境变量 ANDROID_ADB_PATH 指定 adb 位置。
 """
 import asyncio
-import time
-import subprocess
 import os
+import shutil
+import subprocess
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
-os.environ['PATH'] = 'D:/leidian/LDPlayer9;' + os.environ['PATH']
+
+# 自动检测 adb：先看 ANDROID_ADB_PATH 环境变量，再看 PATH
+ADB = os.environ.get("ANDROID_ADB_PATH") or shutil.which("adb")
+if not ADB:
+    raise RuntimeError(
+        "未找到 adb。请将 adb 加入 PATH，"
+        "或设置环境变量 ANDROID_ADB_PATH 指向 adb 可执行文件。"
+    )
 
 from damai_mcp.device.manager import DeviceManager
 from damai_mcp.actions.actions import tap, screenshot, swipe
 from damai_mcp.inspector.dump import dump_ui
 from damai_mcp.inspector.find import find_by_text
-
-
-ADB = r"D:\leidian\LDPlayer9\adb.exe"
 
 
 def adb(*args, timeout=15):
@@ -106,7 +114,7 @@ async def demo_one(device_id, pkg, label):
 async def main():
     banner("🎫 damai-mcp 最终端到端演示")
     print(f"开始时间: {time.strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"雷电路径: {ADB}")
+    print(f"adb 路径: {ADB}")
 
     # L1: 列设备
     banner("L1 设备管理 — 列出 3 台雷电实例")
