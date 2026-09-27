@@ -36,6 +36,15 @@ from .actions.actions import (
 from .actions.actions import (
     tap as _tap,
 )
+from .app import (
+    list_profiles as _app_list_profiles,
+)
+from .app import (
+    load_profile as _app_load_profile,
+)
+from .app import (
+    run_profile as _app_run_profile,
+)
 from .damai.actions import (
     damai_confirm_order as _damai_confirm_order,
 )
@@ -57,8 +66,18 @@ from .damai.actions import (
 from .damai.actions import (
     damai_select_viewers as _damai_select_viewers,
 )
+from .damai.checklist import run_checklist as _damai_run_checklist
 from .damai.selectors import DamaiSelectors, GrabConfig  # noqa: F401
 from .device.adb import which_adb as _which_adb
+from .device.ldplayer import (
+    LDPlayerInstance,
+)
+from .device.ldplayer import (
+    launch_instance as _launch_ldplayer,
+)
+from .device.ldplayer import (
+    which_ldconsole as _which_ldconsole,
+)
 from .device.manager import DeviceManager
 from .inspector.dump import dump_ui as _dump_ui
 from .inspector.dump import dump_ui_to_file as _dump_ui_to_file
@@ -71,6 +90,15 @@ from .inspector.models import UIElement  # noqa: F401
 from .utils.errors import DamaiMCPError  # noqa: F401
 from .utils.logging import configure as configure_logging
 from .utils.logging import logger
+from .utils.ntp import (
+    DEFAULT_NTP_SERVER as _DEFAULT_NTP_SERVER,
+)
+from .utils.ntp import (
+    async_query as _ntp_async_query,
+)
+from .utils.ntp import (
+    fetch_device_time as _ntp_fetch_device_time,
+)
 
 mcp = FastMCP(
     name="damai-mcp",
@@ -132,6 +160,27 @@ async def device_info(device_id: str) -> dict[str, Any]:
     """
     info = await DeviceManager.shared().require(device_id)
     return info.to_dict()
+
+
+@mcp.tool()
+async def launch_ldplayer(
+    index: int = 1,
+    name: str = "damai_bot",
+    device_id: str = "auto",
+    package: str = "cn.damai",
+    timeout_sec: float = 60.0,
+) -> dict[str, Any]:
+    """启动雷电实例、连接 ADB，并启用大麦所需的 ARM/Houdini bridge。
+
+    This only launches and connects an existing instance; it does not install
+    APKs, clear app data, or perform destructive operations.
+    """
+    result = await _launch_ldplayer(
+        LDPlayerInstance(index=index, name=name, device_id=device_id, package=package),
+        adb_timeout=timeout_sec,
+    )
+    result["ldconsole_path"] = _which_ldconsole()
+    return result
 
 
 # ============================================================================
@@ -466,6 +515,7 @@ async def damai_grab(
     open_time: str = "",
     preheat_seconds: float = 30.0,
     max_runtime_sec: float = 600.0,
+    confirm_order: bool = False,
 ) -> dict[str, Any]:
     """一站式抢票：等开票 → 抢档位 → 选观演人 → 提交订单。
 
@@ -488,6 +538,7 @@ async def damai_grab(
         open_time=open_time,
         preheat_seconds=preheat_seconds,
         max_runtime_sec=max_runtime_sec,
+        confirm_order=confirm_order,
     )
 
 
@@ -532,6 +583,179 @@ async def damai_grab_multi(
     return {"accounts": len(accounts), "results": out}
 
 
+@mcp.tool()
+async def ntp_sync(
+    server: str = _DEFAULT_NTP_SERVER,
+    timeout_sec: float = 5.0,
+    device_id: str | None = None,
+) -> dict[str, Any]:
+    """NTP 时间同步 (推荐 ⭐⭐⭐⭐⭐)。
+
+    多设备并行抢票时，确保所有设备时钟一致（精度 <100ms）。
+
+    Args:
+        server: NTP 服务器域名（默认 pool.ntp.org；国内推荐 cn.pool.ntp.org / ntp.aliyun.com）。
+        timeout_sec: 超时秒数。
+        device_id: 可选；同时拿设备的 Unix 时间戳做对比。
+    """
+    result = await _ntp_async_query(server, timeout_sec)
+    payload = result.to_dict()
+    if device_id is not None:
+        device_unix = await _ntp_fetch_device_time(device_id)
+        payload["device_unix"] = device_unix
+        if device_unix is not None:
+            payload["device_offset_ms"] = round(
+                (result.server_unix - device_unix) * 1000, 2,
+            )
+    return payload
+
+
+@mcp.tool()
+async def damai_checklist_grab(
+    device_id: str,
+    item_id: str,
+    open_time: str = "",
+    price_index: int = 1,
+    viewer_names: list[str] | None = None,
+    ticket_num: int = 1,
+    preheat_seconds: float = 30.0,
+    ntp_server: str = "pool.ntp.org",
+) -> dict[str, Any]:
+    """抢票当天一键 checklist（推荐 ⭐⭐⭐⭐⭐）。
+
+    一条命令跑完：NTP 时钟同步 → 设备检查 → 登录验证 → 详情页预热 → 倒计时 → 开票抢票。
+    适合抢票当天 5 分钟前执行，会自动候场等开票。
+
+    Args:
+        device_id: 设备 ID。
+        item_id: 大麦 item id。
+        open_time: 开票时间 'YYYY-MM-DD HH:MM:SS'（空=立即抢）。
+        price_index: 票档序号（1-based）。
+        viewer_names: 观演人姓名列表。
+        ticket_num: 张数。
+        preheat_seconds: 开票前多少秒开始预热（默认 30）。
+        ntp_server: NTP 服务器（默认 pool.ntp.org；国内用 cn.pool.ntp.org）。
+    """
+    async def _phase_cb(name: str) -> None:
+        logger.info(f"[checklist] ▶ {name}")
+
+    async def _progress_cb(seconds_left: float, elapsed_s: int) -> None:
+        if seconds_left > 10:
+            mins = int(seconds_left // 60)
+            logger.info(f"[countdown] 开票 {mins} 分钟后，已候场 {elapsed_s}s")
+        else:
+            logger.info(f"[countdown] 开票 {seconds_left:.1f}s")
+
+    res = await _damai_run_checklist(
+        device_id=device_id,
+        item_id=item_id,
+        open_time=open_time,
+        price_index=price_index,
+        viewer_names=viewer_names or [],
+        ticket_num=ticket_num,
+        preheat_seconds=preheat_seconds,
+        ntp_server=ntp_server,
+        on_phase=_phase_cb,
+        on_progress=_progress_cb,
+    )
+    return res.to_dict()
+
+
+# ============================================================================
+# L5 — Multi-app profile framework (大麦 / 猫眼 / 飞猪 / 自定义)
+# ============================================================================
+
+@mcp.tool()
+async def list_app_profiles() -> dict[str, Any]:
+    """列出所有已注册的 app profile（多网站抢票支持）。
+
+    Returns:
+        {"profiles": [{name, package_name, hints, step_count}]}
+    """
+    from .app.profile import load_profile
+    names = _app_list_profiles()
+    items = []
+    for n in names:
+        try:
+            p = load_profile(n)
+            items.append({
+                "name": p.name,
+                "package_name": p.package_name,
+                "hints": p.hints,
+                "step_count": len(p.steps),
+                "viewer_picker": p.viewer_picker,
+            })
+        except Exception:
+            continue
+    return {"profiles": items, "count": len(items)}
+
+
+@mcp.tool()
+async def app_grab(
+    device_id: str,
+    profile_name: str,
+    item_id: str,
+    options: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """通用 app 抢票执行器（多网站支持 ⭐⭐⭐⭐⭐）。
+
+    内置 profile：
+        - damai (cn.damai)        大麦
+        - maoyan (com.sankuai.movie) 猫眼
+        - fliggy (com.taobao.trip)  飞猪
+
+    Args:
+        device_id: 设备 ID。
+        profile_name: profile 名称（list_app_profiles 可查）。
+        item_id: 商品 / 演出 id。
+        options: 透传给 profile 的参数。例如
+                 ``{"price_index": 1, "viewer_names": ["张三"], "ticket_num": 1}``。
+
+    Returns:
+        RunResult dict with per-step timing + status.
+    """
+    profile = _app_load_profile(profile_name)
+    options = options or {}
+
+    # Special dispatch: 大麦 handled via dedicated action
+    if profile.name == "damai":
+        from .damai.actions import damai_grab as _damai_grab_special
+        grab = await _damai_grab_special(
+            device_id=device_id,
+            item_id=item_id,
+            price_index=int(options.get("price_index", 1)),
+            viewer_names=list(options.get("viewer_names", [])),
+            ticket_num=int(options.get("ticket_num", 1)),
+            open_time=options.get("open_time", ""),
+            preheat_seconds=float(options.get("preheat_seconds", 0.0)),
+            max_runtime_sec=float(options.get("max_runtime_sec", 60.0)),
+        )
+        return {
+            "profile": profile.name,
+            "package": profile.package_name,
+            "item_id": item_id,
+            "status": grab.get("status", "submitted"),
+            "grab_result": grab,
+            "dispatch": "damai_grab_special",
+        }
+
+    # Generic step runner for maoyan/fliggy/custom profiles
+    # Hydrate runtime args from options
+    for step in profile.steps:
+        if step.action == "select_checkbox":
+            label = options.get("viewer_label") or (
+                options.get("viewer_names", [""])[0]
+                if options.get("viewer_names") else ""
+            )
+            if label:
+                step.args["label"] = label
+        if step.action == "tap_index":
+            if "index" not in step.args and "price_index" in options:
+                step.args["index"] = int(options["price_index"]) - 1
+
+    return (await _app_run_profile(profile, device_id, item_id, options)).to_dict()
+
+
 # ============================================================================
 # CLI entry
 # ============================================================================
@@ -554,6 +778,58 @@ def main() -> None:
     sub.add_parser("list-devices", help="列出连接的设备（一次性）")
     sub.add_parser("version", help="打印版本")
 
+    # CLI: ntp-sync
+    ntp_p = sub.add_parser(
+        "ntp-sync",
+        help="NTP 时钟同步 (打印 offset_ms)",
+    )
+    ntp_p.add_argument("--server", default="pool.ntp.org")
+    ntp_p.add_argument("--timeout", type=float, default=5.0)
+    ntp_p.add_argument("--device", default=None, help="同时校验设备时间")
+
+    # CLI: list-profiles
+    sub.add_parser("list-profiles", help="列出所有支持的 app profile")
+
+    # CLI: app-grab
+    app_p = sub.add_parser(
+        "app-grab",
+        help="通用多网站抢票执行器",
+        description="用任意 profile 抢该网站的票。damai 走专用流程；其他走 step runner。",
+    )
+    app_p.add_argument("--device", required=True)
+    app_p.add_argument("--profile", required=True, help="profile 名（先 list-profiles）")
+    app_p.add_argument("--item-id", required=True)
+    app_p.add_argument(
+        "--option", action="append", default=[],
+        help="profile 选项 (k=v，可多次)，如 --option price_index=1 --option viewer_names=张三",
+    )
+
+    # CLI: 抢票当天 checklist
+    grab_p = sub.add_parser(
+        "grab",
+        help="抢票当天一键 checklist（推荐）",
+        description=(
+            "一条命令跑完：设备检查 → 登录验证 → 详情页预热 → 倒计时 → 开票抢票。"
+            "适合开票前 5 分钟执行，自动候场等开票。"
+        ),
+    )
+    grab_p.add_argument("--device", required=True, help="设备 ID，如 127.0.0.1:5555")
+    grab_p.add_argument("--item-id", required=True, help="大麦 item id")
+    grab_p.add_argument(
+        "--open-time", default="",
+        help="开票时间 'YYYY-MM-DD HH:MM:SS'，空=立即抢",
+    )
+    grab_p.add_argument("--price", type=int, default=1, help="票档序号（1-based）")
+    grab_p.add_argument(
+        "--viewer", action="append", default=[],
+        help="观演人姓名（可多次 --viewer 张三）",
+    )
+    grab_p.add_argument("--num", type=int, default=1, help="张数")
+    grab_p.add_argument(
+        "--preheat", type=float, default=30.0,
+        help="开票前预热秒数（默认 30）",
+    )
+
     args = parser.parse_args()
     configure_logging(level=args.log_level, log_dir=Path(args.log_dir))
 
@@ -570,9 +846,101 @@ def main() -> None:
         for d in devices:
             tag = "EMU" if d.is_emulator else "DEVICE"
             print(f"  {d.device_id}\t{d.state}\t{d.model}\t{d.screen_size}\t{tag}")
+    elif args.cmd == "list-profiles":
+        import asyncio
+
+        from .app.profile import load_profile
+        names = _app_list_profiles()
+        print(f"已注册 {len(names)} 个 profile:")
+        for n in names:
+            p = load_profile(n)
+            steps = len(p.steps)
+            hints = p.hints[:2]
+            print(f"  - {n:10s} ({p.package_name:25s}) {steps} 步 hints={hints}")
     elif args.cmd == "version":
         from . import __version__
         print(f"damai-mcp {__version__}")
+    elif args.cmd == "ntp-sync":
+        import asyncio
+        import json as _json
+        result = asyncio.run(_ntp_async_query(args.server, args.timeout))
+        print(_json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
+        if args.device:
+            device_unix = asyncio.run(_ntp_fetch_device_time(args.device))
+            if device_unix is not None:
+                delta_ms = (result.server_unix - device_unix) * 1000
+                print(f"设备 {args.device} Unix={device_unix} 偏差 {delta_ms:+.2f}ms")
+    elif args.cmd == "grab":
+        import asyncio
+        import json
+
+        async def _phase_cb(name: str) -> None:
+            print(f"  ▶ {name}", flush=True)
+
+        async def _progress_cb(seconds_left: float, elapsed_s: int) -> None:
+            if seconds_left > 60:
+                print(f"  ⏱  开票还有 {int(seconds_left // 60)} 分钟", flush=True)
+            elif seconds_left > 10:
+                print(f"  ⏱  开票还有 {int(seconds_left)}s", flush=True)
+            else:
+                print(f"  🚀 开票 {seconds_left:.1f}s！", flush=True)
+
+        logger.info(
+            f"检查清单启动: device={args.device} item={args.item_id} "
+            f"开票={args.open_time or 'now'} 票档={args.price}"
+        )
+        result = asyncio.run(_damai_run_checklist(
+            device_id=args.device,
+            item_id=args.item_id,
+            open_time=args.open_time,
+            price_index=args.price,
+            viewer_names=args.viewer,
+            ticket_num=args.num,
+            preheat_seconds=args.preheat,
+            on_phase=_phase_cb,
+            on_progress=_progress_cb,
+        ))
+        print("\n" + "=" * 60)
+        print(f"📋 结果: {result.status}")
+        if result.error:
+            print(f"❌ 错误: {result.error}")
+        print("=" * 60)
+        print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
+    elif args.cmd == "app-grab":
+        import asyncio
+        import json
+        options: dict[str, Any] = {}
+        for kv in args.option:
+            if "=" not in kv:
+                print(f"⚠️  跳过非法 option {kv!r} (需要 k=v)")
+                continue
+            k, _, v = kv.partition("=")
+            # try int
+            try:
+                v2: Any = int(v)
+            except ValueError:
+                v2 = v
+            options[k] = v2
+        logger.info(f"app-grab: profile={args.profile} item={args.item_id} options={options}")
+        # Reuse the MCP tool implementation directly (avoids double-async wrapping)
+        from .app.profile import load_profile as _load_profile
+        from .damai.actions import damai_grab as _damai_grab_special
+        profile = _load_profile(args.profile)
+        if profile.name == "damai":
+            grab = asyncio.run(_damai_grab_special(
+                device_id=args.device,
+                item_id=args.item_id,
+                price_index=int(options.get("price_index", 1)),
+                viewer_names=[options["viewer_label"]] if "viewer_label" in options else [],
+                ticket_num=int(options.get("ticket_num", 1)),
+                open_time=options.get("open_time", ""),
+                preheat_seconds=float(options.get("preheat_seconds", 0.0)),
+                max_runtime_sec=float(options.get("max_runtime_sec", 60.0)),
+            ))
+            result = {"profile": "damai", "status": grab.get("status"), "grab_result": grab}
+        else:
+            result = asyncio.run(_app_run_profile(profile, args.device, args.item_id, options)).to_dict()
+        print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

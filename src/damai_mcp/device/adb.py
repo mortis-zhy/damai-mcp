@@ -57,7 +57,10 @@ def which_adb() -> str | None:
         return found
     # Common emulator-bundled locations
     candidates = [
+        # LDPlayer 9 default installation used by this project.
+        Path("D:/leidian/LDPlayer9") / _ADB_BIN,
         Path("C:/Program Files/LDPlayer") / _ADB_BIN,
+        Path("C:/Program Files/LDPlayer9") / _ADB_BIN,
         Path("C:/Program Files/Nox/bin") / _ADB_BIN,
         Path("C:/Program Files/MuMu") / _ADB_BIN,
         Path("C:/platform-tools") / _ADB_BIN,

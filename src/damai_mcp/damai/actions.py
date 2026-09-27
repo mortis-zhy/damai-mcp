@@ -25,6 +25,12 @@ from .selectors import DamaiSelectors
 
 DAMAI_PACKAGE = "cn.damai"
 DAMAI_MAIN_ACTIVITY = "cn.damai.homepage.MainActivity"
+DAMAI_LOGGED_OUT_TEXTS = ("登录/注册", "立即登录")
+DAMAI_AUTH_ACTIVITY_MARKERS = (
+    "com.ali.user.mobile.login.ui.UserLoginActivity",
+    "com.ali.user.open.tbauth.ui.TbAuth",
+    "com.alibaba.wireless.security.open.middletier.fc.ui.ContainerActivity",
+)
 
 
 # ---- helpers ----------------------------------------------------------------
@@ -77,11 +83,22 @@ async def damai_login_check(device_id: str, *, timeout: float = 3.0) -> dict[str
         raise AppNotRunningError(
             f"大麦 ({DAMAI_PACKAGE}) 不在前台，请先打开 APP 并登录。"
         )
+    window_state = await shell(
+        "dumpsys", "window", "windows",
+        device_id=device_id, timeout=5, check=False,
+    )
+    if any(marker in window_state for marker in DAMAI_AUTH_ACTIVITY_MARKERS):
+        return {
+            "logged_in": False,
+            "foreground": True,
+            "user_hint": "请在大麦内完成登录或安全验证后再继续。",
+        }
     # Logged-in indicator: "我的" tab shows username / 我的订单 visible
-    # Logged-out indicator: 登录/注册 button visible
-    login_btn = await assert_text(device_id, "登录/注册", timeout=timeout)
-    if login_btn:
-        return {"logged_in": False, "foreground": True, "user_hint": None}
+    # The account tab label changed from "登录/注册" to "立即登录" in 9.0.31.
+    for text in DAMAI_LOGGED_OUT_TEXTS:
+        login_btn = await assert_text(device_id, text, timeout=timeout)
+        if login_btn:
+            return {"logged_in": False, "foreground": True, "user_hint": None}
     return {"logged_in": True, "foreground": True, "user_hint": None}
 
 
@@ -261,8 +278,14 @@ async def damai_grab(
     preheat_seconds: float = 30.0,
     max_runtime_sec: float = 600.0,
     poll_interval_ms: int = 150,
+    confirm_order: bool = False,
 ) -> dict[str, Any]:
-    """One-shot 抢票: preheat → wait for open → buy → confirm.
+    """Prepare a ticket order and stop before sensitive user actions.
+
+    By default the workflow stops after ticket tier and viewer selection so the
+    user can inspect the order and complete any required verification. Set
+    ``confirm_order=True`` only when the user has explicitly chosen to submit
+    the order. Payment is never clicked automatically.
 
     Returns: {
         "status": "submitted" | "failed",
@@ -343,16 +366,27 @@ async def damai_grab(
         if viewer_names:
             await damai_select_viewers(device_id, viewer_names)
 
-        # 9. Confirm order
+        if not confirm_order:
+            shot = str(shots_dir / f"ready_for_human_{int(time.time())}.png")
+            await screenshot(device_id, shot)
+            log_paths.append(shot)
+            elapsed = int((time.time() - t_start) * 1000)
+            return {
+                "status": "ready_for_human",
+                "elapsed_ms": elapsed,
+                "item_id": item_id,
+                "price_index": price_index,
+                "viewer_names": viewer_names,
+                "requires_human_confirmation": True,
+                "payment_started": False,
+                "screenshots": log_paths,
+                "error": None,
+            }
+
+        # Submit only after the caller explicitly opts in. Payment remains
+        # outside this automation flow and must be completed by the user.
         await damai_confirm_order(device_id, selectors=selectors)
-
-        # 10. Pay button (caller will pay in APP)
-        try:
-            pay_btn = await damai_pay(device_id, selectors=selectors, timeout=3.0)
-        except UIElementNotFoundError:
-            pay_btn = None  # May need extra verification step
-
-        shot = str(shots_dir / f"grab_done_{int(time.time())}.png")
+        shot = str(shots_dir / f"order_submitted_{int(time.time())}.png")
         await screenshot(device_id, shot)
         log_paths.append(shot)
 
@@ -363,7 +397,8 @@ async def damai_grab(
             "item_id": item_id,
             "price_index": price_index,
             "viewer_names": viewer_names,
-            "pay_btn_found": pay_btn is not None,
+            "requires_human_confirmation": False,
+            "payment_started": False,
             "screenshots": log_paths,
             "error": None,
         }

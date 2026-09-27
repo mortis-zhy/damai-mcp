@@ -37,6 +37,9 @@ async def dump_ui(device_id: str, *, compressed: bool = True) -> list[UIElement]
         raise ADBError(f"uiautomator dump 失败: {dump_out!r}")
 
     # 2. read the XML — try several known paths
+    # IMPORTANT: use `adb exec-out cat` instead of `adb shell cat` — the latter
+    # routes through Windows console code page (GBK) for non-ASCII bytes,
+    # which mangles Chinese in the UI dump. `exec-out` keeps raw bytes intact.
     candidates = [
         "/sdcard/window_dump.xml",
         "/sdcard/dump.xml",
@@ -45,15 +48,17 @@ async def dump_ui(device_id: str, *, compressed: bool = True) -> list[UIElement]
     ]
     xml_text: str | None = None
     for path in candidates:
-        out = await shell("cat", path, device_id=device_id, check=False, timeout=5)
-        if out and "<node" in out:
-            xml_text = out
+        # Use exec-out to bypass Windows code page mangling for non-ASCII
+        result = await adb("exec-out", "cat", path,
+                           device_id=device_id, check=False, timeout=5)
+        if result.ok and result.stdout_bytes and b"<node" in result.stdout_bytes:
+            xml_text = result.stdout_bytes.decode("utf-8", errors="replace")
             break
     if xml_text is None:
-        # last resort: use adb pull
+        # Last resort: bytes already
         result = await adb("exec-out", "cat", "/sdcard/window_dump.xml",
                            device_id=device_id, check=False, timeout=5)
-        xml_text = result.stdout
+        xml_text = result.stdout_bytes.decode("utf-8", errors="replace") if result.stdout_bytes else None
     if not xml_text or "<node" not in xml_text:
         raise ADBError("uiautomator dump 未返回有效 XML")
 

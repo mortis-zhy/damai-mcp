@@ -40,5 +40,19 @@ accounts.local.json
 # OS
 .DS_Store
 Thumbs.db
+
 # 调试截图（运行时生成）
 damai_shots/
+
+# Claude Code 内部日志（绝不入仓）
+.claude/
+
+# ruff 编译缓存
+.ruff_cache/
+
+# Session handoff 文档（含本地路径）
+SESSION_HANDOFF*.md
+
+# APK 文件（太大不入仓，发布到 releases 即可）
+apks/
+*.apk

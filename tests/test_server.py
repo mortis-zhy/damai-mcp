@@ -59,4 +59,4 @@ def test_l4_tools_present():
 def test_imports_are_clean():
     """Smoke check: importing the package should not pull in anything unexpected."""
     import damai_mcp
-    assert damai_mcp.__version__ == "0.1.0"
+    assert damai_mcp.__version__ == "0.2.3"

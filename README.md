@@ -1,6 +1,6 @@
 # 🎫 damai-mcp
 
-[![PyPI](https://img.shields.io/badge/pypi-v0.1.0-blue)](https://pypi.org/project/damai-mcp/)
+[![PyPI](https://img.shields.io/badge/pypi-v0.2.3-blue)](https://pypi.org/project/damai-mcp/)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)]()
 [![License](https://img.shields.io/badge/license-MIT-yellow)]()
 [![MCP](https://img.shields.io/badge/MCP-1.0%2B-purple)](https://modelcontextprotocol.io)
